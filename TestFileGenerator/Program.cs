@@ -16,7 +16,7 @@ namespace TestTaskSorting
 
 			long targetSizeInBytes = args.Length > 1 && long.TryParse(args[1], out var megaBytes)
 				? megaBytes * 1024 * 1024
-				: 1000L * 1024 * 1024; // 1000 MB for example
+				: 100 * 1024 * 1024; // 1000 MB for example
 
 			GenerateTestFile(filePath, targetSizeInBytes);
 		}

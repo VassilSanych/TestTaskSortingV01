@@ -82,6 +82,8 @@ internal class LargeFileSorter
 	static List<LineParts>? sortedlines;
 	static int chunkIndex = 0;
 
+	static int allLines = 0;
+
 	static void MakeChunks(string inputFilePath)
 	{
 		using var reader = new StreamReader(inputFilePath);
@@ -94,6 +96,7 @@ internal class LargeFileSorter
 				try
 				{
 					var line = reader.ReadLine();
+					allLines++;
 					if (!string.IsNullOrWhiteSpace(line))
 						linesToFill.Add(new LineParts(line));
 				}
@@ -110,6 +113,7 @@ internal class LargeFileSorter
 			ChunkFilledEvent.Set();
 		}
 
+		ChunkTakenToSortEvent.WaitOne();
 		filledLines = null;
 		ChunkFilledEvent.Set();
 	}
@@ -135,6 +139,8 @@ internal class LargeFileSorter
 		ChunkTakenToSortEvent.Set();
 	}
 
+	static int chunkLines = 0;
+
 	static void WriteSortedChunks()
 	{
 		while (true)
@@ -146,13 +152,20 @@ internal class LargeFileSorter
 			ChunkTakenToWriteEvent.Set();
 			using var writer = new StreamWriter($"chunk_{chunkIndex}.txt");
 			foreach (var line in linesToWrite)
+			{
 				writer.WriteLine("{0}. {1}", line.Number, line.Text);
+				chunkLines++;
+			}
+
 			chunkIndex++;
 			Console.WriteLine($@"Chunk created: {chunkIndex}");
+			Console.WriteLine($@"chunkLines: {chunkLines}");
 		}
 	}
 
-	static string[] tempArray;
+	static int mergedLines = 0;
+	static LineParts[] tempArray;
+
 	static void GetMergedLines()
 	{
 		var files = Directory.GetFiles(".", "chunk_*.txt");
@@ -177,11 +190,12 @@ internal class LargeFileSorter
 			{
 				var kvp = priorityQueue.First();
 
-				mergedLinesBuffer.Add($"{kvp.Key.Number}. {kvp.Key.Text}");
+				mergedLinesBuffer.Add(kvp.Key);
+				mergedLines++;
 				if (mergedLinesBuffer.Count > 10000)
 				{
 					tempArray = mergedLinesBuffer.ToArray();
-					MergedLinePreparedEvent.Set();									
+					MergedLinePreparedEvent.Set();
 					MergedLinesTakenEvent.WaitOne();
 					mergedLinesBuffer.Clear();
 				}
@@ -218,14 +232,17 @@ internal class LargeFileSorter
 
 			foreach (var file in files)
 				File.Delete(file);
+
+			Console.WriteLine($"mergedLines: {mergedLines}");
 		}
 	}
 
 
-	static List<string>? mergedLinesBuffer = new();
+	static List<LineParts>? mergedLinesBuffer = new();
 	static AutoResetEvent MergedLinePreparedEvent = new(false);
 	static AutoResetEvent MergedLinesTakenEvent = new(true);
 
+	static int resulLines = 0;
 
 	static void WriteMergedLines(string outputFilePath)
 	{
@@ -235,16 +252,21 @@ internal class LargeFileSorter
 			MergedLinePreparedEvent.WaitOne();
 			if (mergedLinesBuffer == null)
 				break;
-			
-			Span<string> takenMergedLinesBuffer = tempArray;
+
+			Span<LineParts> takenMergedLinesBuffer = tempArray;
 
 			MergedLinesTakenEvent.Set();
 
 			foreach (var line in takenMergedLinesBuffer)
-				writer.WriteLine(line);
+			{
+				writer.WriteLine("{0}. {1}", line.Number, line.Text);
+				resulLines++;
+			}
 		}
 
 		MergedLinesTakenEvent.Set();
+		Console.WriteLine($"allLines: {allLines}");
+		Console.WriteLine($"resulLines: {resulLines}");
 	}
 
 
