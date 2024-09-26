@@ -32,6 +32,11 @@ namespace TestTaskSorting;
 
 internal class LargeFileSorter
 {
+	static long allLines = 0;
+	static long chunkLines = 0;
+	static long mergedLines = 0;
+	static long resultLines = 0;
+
 	static void Main(string[] args)
 	{
 		try
@@ -80,9 +85,9 @@ internal class LargeFileSorter
 	static List<LineParts>? filledLines;
 	static List<LineParts>? linesToSort;
 	static List<LineParts>? sortedlines;
-	static int chunkIndex = 0;
+	static long chunkIndex = 0;
 
-	static int allLines = 0;
+
 
 	static void MakeChunks(string inputFilePath)
 	{
@@ -139,7 +144,7 @@ internal class LargeFileSorter
 		ChunkTakenToSortEvent.Set();
 	}
 
-	static int chunkLines = 0;
+	
 
 	static void WriteSortedChunks()
 	{
@@ -161,9 +166,10 @@ internal class LargeFileSorter
 			Console.WriteLine($@"Chunk created: {chunkIndex}");
 			Console.WriteLine($@"chunkLines: {chunkLines}");
 		}
+		ChunkTakenToWriteEvent.Set();
 	}
 
-	static int mergedLines = 0;
+
 	static LineParts[] tempArray;
 
 	static void GetMergedLines()
@@ -242,7 +248,7 @@ internal class LargeFileSorter
 	static AutoResetEvent MergedLinePreparedEvent = new(false);
 	static AutoResetEvent MergedLinesTakenEvent = new(true);
 
-	static int resulLines = 0;
+
 
 	static void WriteMergedLines(string outputFilePath)
 	{
@@ -260,13 +266,13 @@ internal class LargeFileSorter
 			foreach (var line in takenMergedLinesBuffer)
 			{
 				writer.WriteLine("{0}. {1}", line.Number, line.Text);
-				resulLines++;
+				resultLines++;
 			}
 		}
 
 		MergedLinesTakenEvent.Set();
 		Console.WriteLine($"allLines: {allLines}");
-		Console.WriteLine($"resulLines: {resulLines}");
+		Console.WriteLine($"resultLines: {resultLines}");
 	}
 
 
