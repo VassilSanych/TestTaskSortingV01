@@ -83,8 +83,7 @@ internal class LargeFileSorter
 	static AutoResetEvent ChunkTakenToWriteEvent = new(true);
 
 	static List<LineParts>? filledLines;
-	static List<LineParts>? linesToSort;
-	static List<LineParts>? sortedlines;
+	static LineParts[] sortedlines;
 	static long chunkIndex = 0;
 
 
@@ -131,14 +130,13 @@ internal class LargeFileSorter
 			ChunkFilledEvent.WaitOne();
 			if (filledLines == null)
 				break;
-			linesToSort = filledLines.ToList();
+			Span<LineParts> linesToSort = filledLines.ToArray();
 			ChunkTakenToSortEvent.Set();
 			linesToSort.Sort(_partsComparer);
-			sortedlines = linesToSort.ToList();
+			sortedlines = linesToSort.ToArray();
 			ChunkSortedEvent.Set();
 		}
 
-		linesToSort = null;
 		sortedlines = null;
 		ChunkSortedEvent.Set();
 		ChunkTakenToSortEvent.Set();
@@ -153,7 +151,7 @@ internal class LargeFileSorter
 			ChunkSortedEvent.WaitOne();
 			if (sortedlines == null)
 				break;
-			var linesToWrite = sortedlines.ToList();
+			Span<LineParts> linesToWrite = sortedlines.ToArray();
 			ChunkTakenToWriteEvent.Set();
 			using var writer = new StreamWriter($"chunk_{chunkIndex}.txt");
 			foreach (var line in linesToWrite)
