@@ -55,7 +55,7 @@ internal class LargeFileSorter
 	/// <summary>
 	/// Number of lines per chunk
 	/// </summary>
-	private static int _chunkSize = 100000;
+	private static int _chunkSize = 1000000;
 
 	private static readonly PartsComparer? _partsComparer = new();
 
@@ -64,53 +64,101 @@ internal class LargeFileSorter
 	/// </summary>
 	static void SplitIntoChunks(string inputFilePath)
 	{
+		var tasks = new Task[3];
+		tasks[0] = Task.Factory.StartNew(() => MakeChunks(inputFilePath), TaskCreationOptions.LongRunning);
+		tasks[1] = Task.Factory.StartNew(() => SortChunks(), TaskCreationOptions.LongRunning);
+		tasks[2] = Task.Factory.StartNew(() => WriteSortedChunks(), TaskCreationOptions.LongRunning);
+		Task.WaitAll(tasks);
+	}
+
+
+	static AutoResetEvent ChunkTakenToSortEvent = new(true);
+	static AutoResetEvent ChunkFilledEvent = new(false);
+	static AutoResetEvent ChunkSortedEvent = new(false);
+	static AutoResetEvent ChunkTakenToWriteEvent = new(true);
+
+	static List<LineParts>? filledLines;
+	static List<LineParts>? linesToSort;
+	static List<LineParts>? sortedlines;
+	static int chunkIndex = 0;
+
+	static void MakeChunks(string inputFilePath)
+	{
 		using var reader = new StreamReader(inputFilePath);
-		var chunkIndex = 0;
 		while (!reader.EndOfStream)
 		{
-			WriteChunk(reader, chunkIndex);
+			ChunkTakenToSortEvent.WaitOne();
+			var linesToFill = new List<LineParts>(_chunkSize);
+			for (var i = 0; i < _chunkSize && !reader.EndOfStream; i++)
+			{
+				try
+				{
+					var line = reader.ReadLine();
+					if (!string.IsNullOrWhiteSpace(line))
+						linesToFill.Add(new LineParts(line));
+				}
+				catch (Exception e)
+				{
+					Console.WriteLine($@"ReadLine error: {e}");
+					filledLines = null;
+					ChunkFilledEvent.Set();
+					throw;
+				}
+			}
 
+			filledLines = linesToFill.ToList();
+			ChunkFilledEvent.Set();
+		}
+
+		filledLines = null;
+		ChunkFilledEvent.Set();
+	}
+
+	static void SortChunks()
+	{
+		while (true)
+		{
+			ChunkTakenToWriteEvent.WaitOne();
+			ChunkFilledEvent.WaitOne();
+			if (filledLines == null)
+				break;
+			linesToSort = filledLines.ToList();
+			ChunkTakenToSortEvent.Set();
+			linesToSort.Sort(_partsComparer);
+			sortedlines = linesToSort.ToList();
+			ChunkSortedEvent.Set();
+		}
+
+		linesToSort = null;
+		sortedlines = null;
+		ChunkSortedEvent.Set();
+		ChunkTakenToSortEvent.Set();
+	}
+
+	static void WriteSortedChunks()
+	{
+		while (true)
+		{
+			ChunkSortedEvent.WaitOne();
+			if (sortedlines == null)
+				break;
+			var linesToWrite = sortedlines.ToList();
+			ChunkTakenToWriteEvent.Set();
+			using var writer = new StreamWriter($"chunk_{chunkIndex}.txt");
+			foreach (var line in linesToWrite)
+				writer.WriteLine("{0}. {1}", line.Number, line.Text);
 			chunkIndex++;
 			Console.WriteLine($@"Chunk created: {chunkIndex}");
 		}
 	}
 
-	static void WriteChunk(StreamReader reader, int chunkIndex)
-	{
-		var lines = new List<LineParts>(_chunkSize);
-		for (var i = 0; i < _chunkSize && !reader.EndOfStream; i++)
-		{
-			try
-			{
-				var line = reader.ReadLine();
-				if (!string.IsNullOrWhiteSpace(line))
-					lines.Add(new LineParts(line));
-			}
-			catch (Exception e)
-			{
-				Console.WriteLine($@"ReadLine error: {e}");
-				throw;
-			}
-		}
-
-		lines.Sort(_partsComparer);
-
-		using var writer = new StreamWriter($"chunk_{chunkIndex}.txt");
-		foreach (var line in lines)
-			writer.WriteLine("{0}. {1}", line.Number, line.Text);
-	}
-
-
-	/// <summary>
-	///  Merge the sorted chunks
-	/// </summary>
-	static void MergeSortedChunks(string outputFilePath)
+	static string[] tempArray;
+	static void GetMergedLines()
 	{
 		var files = Directory.GetFiles(".", "chunk_*.txt");
 		var sortedChunks = files.Select(file => new StreamReader(file)).ToList();
 		try
 		{
-			using var writer = new StreamWriter(outputFilePath);
 			var priorityQueue = new SortedDictionary<LineParts, StreamReader>(_partsComparer);
 
 			foreach (var chunk in sortedChunks)
@@ -128,7 +176,16 @@ internal class LargeFileSorter
 			while (priorityQueue.Count > 0)
 			{
 				var kvp = priorityQueue.First();
-				writer.WriteLine("{0}. {1}", kvp.Key.Number, kvp.Key.Text);
+
+				mergedLinesBuffer.Add($"{kvp.Key.Number}. {kvp.Key.Text}");
+				if (mergedLinesBuffer.Count > 10000)
+				{
+					tempArray = mergedLinesBuffer.ToArray();
+					MergedLinePreparedEvent.Set();									
+					MergedLinesTakenEvent.WaitOne();
+					mergedLinesBuffer.Clear();
+				}
+
 
 				if (!kvp.Value.EndOfStream)
 				{
@@ -150,12 +207,56 @@ internal class LargeFileSorter
 		}
 		finally
 		{
+			tempArray = mergedLinesBuffer.ToArray();
+			MergedLinePreparedEvent.Set();
+			MergedLinesTakenEvent.WaitOne();
+			mergedLinesBuffer = null;
+			MergedLinePreparedEvent.Set();
+
 			foreach (var chunk in sortedChunks)
 				chunk.Close();
 
 			foreach (var file in files)
 				File.Delete(file);
 		}
+	}
+
+
+	static List<string>? mergedLinesBuffer = new();
+	static AutoResetEvent MergedLinePreparedEvent = new(false);
+	static AutoResetEvent MergedLinesTakenEvent = new(true);
+
+
+	static void WriteMergedLines(string outputFilePath)
+	{
+		using var writer = new StreamWriter(outputFilePath);
+		while (true)
+		{
+			MergedLinePreparedEvent.WaitOne();
+			if (mergedLinesBuffer == null)
+				break;
+			
+			Span<string> takenMergedLinesBuffer = tempArray;
+
+			MergedLinesTakenEvent.Set();
+
+			foreach (var line in takenMergedLinesBuffer)
+				writer.WriteLine(line);
+		}
+
+		MergedLinesTakenEvent.Set();
+	}
+
+
+	/// <summary>
+	///  Merge the sorted chunks
+	/// </summary>
+	static void MergeSortedChunks(string outputFilePath)
+	{
+		var tasks = new Task[2];
+		tasks[0] = Task.Factory.StartNew(GetMergedLines, TaskCreationOptions.LongRunning);
+		tasks[1] = Task.Factory.StartNew(() => WriteMergedLines(outputFilePath), TaskCreationOptions.LongRunning);
+		Task.WaitAll(tasks);
 	}
 
 	static void SortLargeFile(string inputFilePath, string outputFilePath)
